@@ -40,7 +40,7 @@ if (-not (Test-Path ".env")) {
 
 # 4. Start Backend Server in a new window
 Write-Host "[1/3] Starting VEXA Backend Engine on port 8765..." -ForegroundColor Green
-Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-Command", "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765"
+Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-Command", "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --reload"
 
 Start-Sleep -Seconds 2
 

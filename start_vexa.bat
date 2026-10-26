@@ -39,7 +39,7 @@ if not exist ".env" (
 
 :: 4. Start Backend Server
 echo [1/3] Starting VEXA Backend Engine on port 8765...
-start "VEXA Backend" cmd /k "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765"
+start "VEXA Backend" cmd /k "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --reload"
 
 :: Wait for backend socket
 powershell -NoProfile -Command "Start-Sleep -Seconds 2"

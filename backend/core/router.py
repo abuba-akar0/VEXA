@@ -104,4 +104,25 @@ async def handle_local_reflex(user_prompt: str, workspace_path: Optional[str] = 
             "message": f"Active dev ports:\n{display}"
         }
 
+    # 8. Instant Time & Date reflex: "what is time today", "time", "date"
+    if any(q in lower for q in ["what is time", "what time", "current time", "time today", "what is the time", "date today", "current date"]):
+        from datetime import datetime
+        now_str = datetime.now().strftime("%A, %B %d, %Y - %I:%M:%S %p")
+        return {
+            "handled": True,
+            "type": "time_info",
+            "result": now_str,
+            "message": f"Current Time: {now_str}"
+        }
+
+    # 9. Instant Help / Capabilities reflex: "what can you do", "help me", "who are you"
+    if lower in ["help", "help me", "what can you do", "what you can do", "features", "who are you", "what are you"]:
+        features = "I am VEXA (Virtual Execution & X-Layer Architect) v2.0!\n\n1. System Architecture: Ask 'Draw architecture diagram of <anything>' to render interactive Mermaid.js diagrams with a 'Scaffold to Repo' button.\n2. Coding & Files: Create, edit, patch, or inspect any code in your workspace.\n3. Desktop GUI Control: I see your screen, click buttons, type text, and automate desktop applications.\n4. Instant Reflexes: Type 'git status', 'active ports', 'what is time today', 'list projects', or 'list macros'."
+        return {
+            "handled": True,
+            "type": "capabilities",
+            "result": features,
+            "message": features
+        }
+
     return None

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Terminal, Send, Square, Sparkles, CheckCircle2, AlertCircle, Loader2, RefreshCw } from "lucide-react";
+import { Terminal, Send, Square, Sparkles, CheckCircle2, AlertCircle, Loader2, X, ChevronDown, ChevronUp } from "lucide-react";
 
 interface CommandBarProps {
   status: string;
@@ -24,7 +24,13 @@ export const CommandBar: React.FC<CommandBarProps> = ({
 }) => {
   const [prompt, setPrompt] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
   const pillRef = useRef<HTMLDivElement>(null);
+
+  // Reset dismissal whenever a new message arrives
+  useEffect(() => {
+    setIsDismissed(false);
+  }, [message]);
 
   // Send bounding box coordinates to Tauri Rust backend
   const reportBounds = useCallback(async () => {
@@ -81,6 +87,13 @@ export const CommandBar: React.FC<CommandBarProps> = ({
   };
 
   const isBusy = ["observing", "planning", "executing", "verifying"].includes(status);
+  const hasDetailedResponse =
+    message &&
+    !isDismissed &&
+    message !== "Ready. Press Alt+Space to activate." &&
+    message !== "Ready. Press Alt+Space to focus." &&
+    message !== "Connected to VEXA Engine v2.0" &&
+    message !== "VEXA Engine connected";
 
   return (
     <div
@@ -89,7 +102,7 @@ export const CommandBar: React.FC<CommandBarProps> = ({
         isGhosting ? "ghost-mode" : ""
       }`}
     >
-      <div className="glass-pill rounded-2xl p-2.5 px-4 shadow-glow flex flex-col gap-2 min-w-[560px] max-w-[760px] border border-cyan-500/30">
+      <div className="glass-pill rounded-2xl p-2.5 px-4 shadow-glow flex flex-col gap-2 min-w-[580px] max-w-[780px] border border-cyan-500/30">
         {/* Top Header Row: Brand, Status, Step, Abort */}
         <div className="flex items-center justify-between text-xs text-slate-300 border-b border-white/10 pb-2">
           <div className="flex items-center gap-2">
@@ -98,7 +111,7 @@ export const CommandBar: React.FC<CommandBarProps> = ({
               VEXA v2.0
             </span>
             <span className="text-slate-500">•</span>
-            <span className="text-slate-400 font-mono text-[11px] truncate max-w-[320px]">
+            <span className="text-slate-400 font-mono text-[11px] truncate max-w-[340px]">
               {message || "Ready. Press Alt+Space to focus."}
             </span>
           </div>
@@ -173,6 +186,20 @@ export const CommandBar: React.FC<CommandBarProps> = ({
           <span className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">Reflex:</span>
           <button
             type="button"
+            onClick={() => onSubmit("what is time today")}
+            className="hover:text-cyan-300 bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded border border-white/5 transition-colors"
+          >
+            time
+          </button>
+          <button
+            type="button"
+            onClick={() => onSubmit("what can you do")}
+            className="hover:text-cyan-300 bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded border border-white/5 transition-colors"
+          >
+            features
+          </button>
+          <button
+            type="button"
             onClick={() => onSubmit("git status")}
             className="hover:text-cyan-300 bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded border border-white/5 transition-colors"
           >
@@ -193,6 +220,28 @@ export const CommandBar: React.FC<CommandBarProps> = ({
             arch diagram
           </button>
         </div>
+
+        {/* Detailed Response / Error Dialog Card */}
+        {hasDetailedResponse && (
+          <div className="mt-2 p-3 bg-slate-900/95 border border-cyan-500/30 rounded-xl text-xs text-slate-200 shadow-2xl max-h-[320px] overflow-y-auto whitespace-pre-wrap leading-relaxed select-text font-sans animate-in fade-in duration-200">
+            <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/10 text-[10px] font-mono">
+              <span className={`font-semibold uppercase tracking-wider ${
+                status === "error" ? "text-rose-400" : status === "done" ? "text-emerald-400" : "text-cyan-400"
+              }`}>
+                {status === "done" ? "Response" : status === "error" ? "Status Notice" : "Agent Execution"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsDismissed(true)}
+                className="hover:text-white p-0.5 rounded hover:bg-white/10 text-slate-400 transition-colors"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div className="text-slate-100">{message}</div>
+          </div>
+        )}
       </div>
     </div>
   );

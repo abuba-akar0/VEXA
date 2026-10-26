@@ -312,9 +312,14 @@ Otherwise, plan 1 to 5 sequential actions to progress towards the goal. Output s
 
                 # 4. VERIFY / EARLY STOP
                 if stop_early or iteration == max_iterations:
+                    done_text = plan.summary
+                    for r in iteration_results:
+                        if r.get("action_type") == "done" and r.get("message"):
+                            done_text = r.get("message")
+                    final_summary = done_text
                     await self.emit_status(
                         "done",
-                        f"Task Completed: {plan.summary}",
+                        f"{done_text}",
                         step=iteration,
                         max_steps=max_iterations
                     )
