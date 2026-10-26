@@ -19,17 +19,17 @@ DEFAULT_WORKSPACE_PATH: str = os.getenv("DEFAULT_WORKSPACE_PATH", str(Path(__fil
 HOST: str = os.getenv("VEXA_HOST", "127.0.0.1")
 PORT: int = int(os.getenv("VEXA_PORT", "8765"))
 
-PRIMARY_MODEL: str = os.getenv("VEXA_PRIMARY_MODEL", "gemini-3.5-flash")
-FALLBACK_MODEL: str = os.getenv("VEXA_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+PRIMARY_MODEL: str = os.getenv("VEXA_PRIMARY_MODEL", "gemini-3.5-flash-lite")
+FALLBACK_MODEL: str = os.getenv("VEXA_FALLBACK_MODEL", "gemini-3.5-flash")
 
 class FreeTierRateLimiter:
     """
     Enforces Google AI Studio Free Tier constraints:
-    - 10 Requests Per Minute (RPM) max
-    - Minimum 6.0 seconds interval between requests
+    - 10 Requests Per Minute (RPM) max window
+    - Minimum 1.0 second spacing between bursts
     Thread-safe and async-safe token bucket implementation.
     """
-    def __init__(self, rpm: int = 10, min_interval_seconds: float = 6.0):
+    def __init__(self, rpm: int = 10, min_interval_seconds: float = 1.0):
         self.rpm = rpm
         self.min_interval = min_interval_seconds
         self.request_timestamps: deque = deque()
@@ -64,7 +64,7 @@ class FreeTierRateLimiter:
             self.last_request_time = now
             self.request_timestamps.append(now)
 
-rate_limiter = FreeTierRateLimiter(rpm=10, min_interval_seconds=6.0)
+rate_limiter = FreeTierRateLimiter(rpm=10, min_interval_seconds=1.0)
 
 def clean_schema_for_gemini(obj: Any) -> Any:
     """
@@ -113,10 +113,10 @@ async def call_gemini_with_resilience(
     client = get_genai_client()
     models_to_try = [
         PRIMARY_MODEL,
-        FALLBACK_MODEL,
-        "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
+        FALLBACK_MODEL,
         "gemini-3.8-flash",
+        "gemini-3.5-flash",
         "gemini-flash-latest"
     ]
     # Deduplicate while preserving order
@@ -130,7 +130,7 @@ async def call_gemini_with_resilience(
     sanitized_schema = clean_schema_for_gemini(response_schema) if response_schema else None
 
     for model_name in unique_models:
-        backoff_delays = [6.0, 12.0]
+        backoff_delays = [1.5]
         for attempt in range(len(backoff_delays) + 1):
             await rate_limiter.acquire()
             try:
@@ -172,11 +172,11 @@ async def call_gemini_with_resilience(
                 if is_transient:
                     if attempt < len(backoff_delays):
                         delay = backoff_delays[attempt]
-                        print(f"[VEXA RateLimit] Transient error on {model_name}. Backing off {delay}s...")
+                        print(f"[VEXA RateLimit] Transient error on {model_name}. Quick backoff {delay}s...")
                         await asyncio.sleep(delay)
                         continue
                     else:
-                        print(f"[VEXA Fallback] Model {model_name} busy. Trying next available model...")
+                        print(f"[VEXA Fallback] Model {model_name} busy. Failing over to next available model...")
                         break  # Move to next model
                 else:
                     raise e

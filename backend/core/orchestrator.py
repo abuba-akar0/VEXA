@@ -1,4 +1,5 @@
 import json
+import time
 import asyncio
 from typing import Dict, Any, Optional, Callable, List
 from google.genai import types
@@ -60,7 +61,9 @@ class Orchestrator:
         max_steps: int = 3,
         actions: Optional[List[Any]] = None,
         diagram: Optional[Dict[str, Any]] = None,
-        approval_required: Optional[Dict[str, Any]] = None
+        approval_required: Optional[Dict[str, Any]] = None,
+        thought: Optional[str] = None,
+        summary: Optional[str] = None
     ):
         """Broadcasts status update to connected WebSocket clients."""
         payload = {
@@ -70,7 +73,9 @@ class Orchestrator:
             "max_steps": max_steps,
             "actions": [a.model_dump() if hasattr(a, "model_dump") else a for a in (actions or [])],
             "diagram": diagram,
-            "approval_required": approval_required
+            "approval_required": approval_required,
+            "thought": thought,
+            "summary": summary
         }
         if self.broadcast_callback:
             try:
@@ -216,25 +221,27 @@ class Orchestrator:
 
         max_iterations = 3
         executed_history: List[Dict[str, Any]] = []
+        all_executed_steps: List[Dict[str, Any]] = []
         final_summary = ""
+        last_thought = ""
         overall_status = "done"
 
         try:
             for iteration in range(1, max_iterations + 1):
                 if self.current_task_abort:
                     overall_status = "aborted"
-                    await self.emit_status("done", "Task aborted by user request.", step=iteration, max_steps=max_iterations)
+                    await self.emit_status("done", "Task aborted by user request.", step=iteration, max_steps=max_iterations, actions=all_executed_steps)
                     break
 
                 # 1. OBSERVE
-                await self.emit_status("observing", f"Capturing visual and workspace context (Step {iteration}/{max_iterations})...", step=iteration, max_steps=max_iterations)
+                await self.emit_status("observing", f"Capturing visual and workspace context (Step {iteration}/{max_iterations})...", step=iteration, max_steps=max_iterations, actions=all_executed_steps)
                 
                 # Capture screen with normalized 10x10 guide grid
                 screen_info = capture_screen(draw_grid=True)
                 context_info = gather_full_context(target_workspace)
 
                 # 2. PLAN
-                await self.emit_status("planning", f"Reasoning with Gemini ({PRIMARY_MODEL})...", step=iteration, max_steps=max_iterations)
+                await self.emit_status("planning", f"Reasoning with Gemini ({PRIMARY_MODEL})...", step=iteration, max_steps=max_iterations, actions=all_executed_steps)
 
                 # Construct multimodal payload
                 user_content_parts = [
@@ -278,30 +285,80 @@ Otherwise, plan 1 to 5 sequential actions to progress towards the goal. Output s
                     plan_data = json.loads(cleaned)
                     plan = VexaPlan(**plan_data)
 
+                last_thought = plan.thought
                 final_summary = plan.summary
+
+                # Build step items for UI visualization
+                current_steps: List[Dict[str, Any]] = []
+                for i, act in enumerate(plan.actions):
+                    desc = act.reasoning or act.command or act.path or (f"Click ({act.target_x}, {act.target_y})" if act.target_x is not None else act.action_type)
+                    if act.action_type == "done" and act.text:
+                        desc = act.text
+                    current_steps.append({
+                        "id": f"step-{iteration}-{i+1}",
+                        "step_num": len(all_executed_steps) + i + 1,
+                        "action_type": act.action_type,
+                        "description": desc,
+                        "status": "pending",
+                        "params": act.model_dump(),
+                        "result": None,
+                        "duration_ms": 0
+                    })
+
                 await self.emit_status(
                     "executing",
                     f"Executing: {plan.summary}",
                     step=iteration,
                     max_steps=max_iterations,
-                    actions=plan.actions
+                    actions=all_executed_steps + current_steps,
+                    thought=plan.thought,
+                    summary=plan.summary
                 )
 
                 # 3. EXECUTE
                 iteration_results = []
                 stop_early = plan.goal_achieved
 
-                for act in plan.actions:
+                for i, act in enumerate(plan.actions):
                     if self.current_task_abort:
                         stop_early = True
                         break
 
+                    current_steps[i]["status"] = "running"
+                    await self.emit_status(
+                        "executing",
+                        f"Step {current_steps[i]['step_num']}: {current_steps[i]['description']}",
+                        step=iteration,
+                        max_steps=max_iterations,
+                        actions=all_executed_steps + current_steps,
+                        thought=plan.thought,
+                        summary=plan.summary
+                    )
+
+                    t0 = time.time()
                     act_res = await self.execute_action(act, target_workspace)
+                    dur_ms = int((time.time() - t0) * 1000)
+
+                    current_steps[i]["duration_ms"] = dur_ms
+                    current_steps[i]["result"] = act_res
+                    current_steps[i]["status"] = "completed" if act_res.get("success", True) else "failed"
                     iteration_results.append(act_res)
-                    
+
+                    await self.emit_status(
+                        "executing",
+                        f"Finished step {current_steps[i]['step_num']}",
+                        step=iteration,
+                        max_steps=max_iterations,
+                        actions=all_executed_steps + current_steps,
+                        thought=plan.thought,
+                        summary=plan.summary
+                    )
+
                     if act.action_type == "done" or act.goal_achieved:
                         stop_early = True
                         break
+
+                all_executed_steps.extend(current_steps)
 
                 executed_history.append({
                     "iteration": iteration,
@@ -321,7 +378,10 @@ Otherwise, plan 1 to 5 sequential actions to progress towards the goal. Output s
                         "done",
                         f"{done_text}",
                         step=iteration,
-                        max_steps=max_iterations
+                        max_steps=max_iterations,
+                        actions=all_executed_steps,
+                        thought=last_thought,
+                        summary=done_text
                     )
                     break
                 else:
@@ -329,7 +389,10 @@ Otherwise, plan 1 to 5 sequential actions to progress towards the goal. Output s
                         "verifying",
                         f"Verifying step {iteration} outcome...",
                         step=iteration,
-                        max_steps=max_iterations
+                        max_steps=max_iterations,
+                        actions=all_executed_steps,
+                        thought=last_thought,
+                        summary=plan.summary
                     )
                     # Short pause for UI stabilization before next loop's screenshot
                     await asyncio.sleep(0.5)
@@ -337,7 +400,7 @@ Otherwise, plan 1 to 5 sequential actions to progress towards the goal. Output s
         except Exception as e:
             overall_status = "error"
             final_summary = f"Execution error: {str(e)}"
-            await self.emit_status("error", final_summary, step=0)
+            await self.emit_status("error", final_summary, step=0, actions=all_executed_steps)
 
         # Persist task to SQLite memory
         save_task_history(
@@ -351,6 +414,8 @@ Otherwise, plan 1 to 5 sequential actions to progress towards the goal. Output s
         return {
             "status": overall_status,
             "summary": final_summary,
+            "thought": last_thought,
+            "actions": all_executed_steps,
             "iterations": len(executed_history),
             "history": executed_history
         }

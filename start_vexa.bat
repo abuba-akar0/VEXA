@@ -56,14 +56,21 @@ echo [3/3] Launching VEXA Overlay...
 echo [INFO] Press Alt+Space at any time to toggle HUD interaction focus.
 echo.
 
+if exist "src-tauri\target\debug\vexa-overlay.exe" (
+    echo [INFO] Compiled native Tauri desktop binary detected!
+    echo [INFO] Starting HUD server on http://localhost:3000...
+    start "VEXA HUD Server" cmd /c "npm run dev"
+    powershell -NoProfile -Command "Start-Sleep -Seconds 2"
+    echo [INFO] Launching native transparent desktop overlay...
+    start "" "src-tauri\target\debug\vexa-overlay.exe"
+    goto :end
+)
+
 where cl >nul 2>nul
 if %ERRORLEVEL% equ 0 goto :launch_tauri
 
 :launch_web
 echo [INFO] Launching VEXA Web Overlay on http://localhost:3000...
-echo [TIP] To compile native Tauri desktop window, install VS Build Tools with:
-echo       winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-echo.
 start http://localhost:3000
 call npm run dev
 goto :end

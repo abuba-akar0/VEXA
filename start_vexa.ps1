@@ -56,15 +56,23 @@ Write-Host "[3/3] Launching VEXA Overlay..." -ForegroundColor Green
 Write-Host "[INFO] Press Alt+Space at any time to toggle HUD interaction focus." -ForegroundColor Cyan
 Write-Host ""
 
+$NativeExe = Join-Path $ScriptDir "overlay\src-tauri\target\debug\vexa-overlay.exe"
+if (Test-Path $NativeExe) {
+    Write-Host "[INFO] Compiled native Tauri desktop binary detected: $NativeExe" -ForegroundColor Green
+    Write-Host "[INFO] Starting HUD server on http://localhost:3000..." -ForegroundColor Cyan
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-Command", "npm run dev"
+    Start-Sleep -Seconds 2
+    Write-Host "[INFO] Launching native VEXA transparent overlay window..." -ForegroundColor Green
+    Start-Process -FilePath $NativeExe
+    exit 0
+}
+
 # Check if MSVC C++ Linker is installed for native Tauri compilation
 if (Get-Command cl -ErrorAction SilentlyContinue) {
     Write-Host "[INFO] C++ Build Tools detected. Launching Tauri native overlay..." -ForegroundColor Green
     npm run tauri dev
 } else {
     Write-Host "[INFO] Launching VEXA Web Overlay on http://localhost:3000..." -ForegroundColor Green
-    Write-Host "[TIP] To compile the native Tauri desktop window, install VS Build Tools with:" -ForegroundColor DarkYellow
-    Write-Host "      winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override `"--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`"" -ForegroundColor DarkYellow
-    Write-Host ""
     Start-Process "http://localhost:3000"
     npm run dev
 }

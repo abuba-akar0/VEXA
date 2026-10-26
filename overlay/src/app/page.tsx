@@ -5,17 +5,30 @@ import { CommandBar } from "../components/CommandBar";
 import { MermaidCanvas } from "../components/MermaidCanvas";
 import { ApprovalToast } from "../components/ApprovalToast";
 
+export interface ExecutionStep {
+  id: string;
+  step_num: number;
+  action_type: string;
+  description: string;
+  status: "pending" | "running" | "completed" | "failed";
+  params?: any;
+  result?: any;
+  duration_ms?: number;
+}
+
 interface StatusMessage {
   status: string;
   message: string;
   step?: number;
   max_steps?: number;
-  actions?: any[];
+  actions?: ExecutionStep[];
   diagram?: {
     diagram_code: string;
     diagram_title?: string;
   } | null;
   approval_required?: any;
+  thought?: string;
+  summary?: string;
 }
 
 export default function Home() {
@@ -23,6 +36,9 @@ export default function Home() {
   const [message, setMessage] = useState<string>("Ready. Press Alt+Space to activate.");
   const [step, setStep] = useState<number>(0);
   const [maxSteps, setMaxSteps] = useState<number>(3);
+  const [actions, setActions] = useState<ExecutionStep[]>([]);
+  const [thought, setThought] = useState<string>("");
+  const [summary, setSummary] = useState<string>("");
   const [diagram, setDiagram] = useState<{ diagram_code: string; diagram_title: string } | null>(null);
   const [approvalData, setApprovalData] = useState<any | null>(null);
   const [isGhosting, setIsGhosting] = useState<boolean>(false);
@@ -71,6 +87,15 @@ export default function Home() {
           if (data.message) setMessage(data.message);
           if (typeof data.step === "number") setStep(data.step);
           if (typeof data.max_steps === "number") setMaxSteps(data.max_steps);
+          if (data.actions && Array.isArray(data.actions)) {
+            setActions(data.actions);
+          }
+          if (data.thought) {
+            setThought(data.thought);
+          }
+          if (data.summary) {
+            setSummary(data.summary);
+          }
 
           if (data.diagram && data.diagram.diagram_code) {
             setDiagram({
@@ -115,6 +140,9 @@ export default function Home() {
   const handleTaskSubmit = async (prompt: string) => {
     setStatus("observing");
     setMessage("Dispatching task to VEXA engine...");
+    setActions([]);
+    setThought("");
+    setSummary("");
     try {
       const res = await fetch("http://127.0.0.1:8765/api/task", {
         method: "POST",
@@ -125,6 +153,16 @@ export default function Home() {
       if (!res.ok) {
         setStatus("error");
         setMessage(data.detail || "Task execution failed.");
+      } else {
+        if (data.actions && Array.isArray(data.actions)) {
+          setActions(data.actions);
+        }
+        if (data.thought) {
+          setThought(data.thought);
+        }
+        if (data.summary) {
+          setSummary(data.summary);
+        }
       }
     } catch (err: any) {
       setStatus("error");
@@ -139,6 +177,14 @@ export default function Home() {
     } catch (err) {
       console.error("Failed to abort task:", err);
     }
+  };
+
+  const handleClear = () => {
+    setActions([]);
+    setThought("");
+    setSummary("");
+    setStatus("idle");
+    setMessage("Ready. Press Alt+Space to activate.");
   };
 
   // Destructive action approval
@@ -175,15 +221,19 @@ export default function Home() {
 
   return (
     <main className="relative w-screen h-screen bg-transparent pointer-events-none select-none">
-      {/* Interactive Command Bar (Pill pointer events are enabled) */}
+      {/* Interactive Command Bar & Execution Timeline */}
       <div className="pointer-events-auto">
         <CommandBar
           status={status}
           message={message}
           step={step}
           maxSteps={maxSteps}
+          actions={actions}
+          thought={thought}
+          summary={summary}
           onSubmit={handleTaskSubmit}
           onAbort={handleAbort}
+          onClear={handleClear}
           isGhosting={isGhosting}
         />
       </div>

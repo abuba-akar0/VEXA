@@ -133,6 +133,16 @@ async def execute_task(req: TaskRequest):
     # 1. Zero-API Local Reflex Check (save 10 RPM quota)
     reflex_result = await handle_local_reflex(prompt, workspace_path=req.workspace_path)
     if reflex_result:
+        reflex_action = {
+            "id": "reflex-1",
+            "step_num": 1,
+            "action_type": reflex_result.get("type", "local_reflex"),
+            "description": reflex_result.get("message", "Completed via local reflex"),
+            "status": "completed",
+            "params": reflex_result,
+            "result": reflex_result,
+            "duration_ms": 5
+        }
         # Save reflex execution to SQLite history
         save_task_history(
             task_prompt=prompt,
@@ -146,11 +156,17 @@ async def execute_task(req: TaskRequest):
             "message": reflex_result.get("message", "Completed via local reflex"),
             "step": 1,
             "max_steps": 1,
-            "reflex": reflex_result
+            "actions": [reflex_action],
+            "reflex": reflex_result,
+            "summary": reflex_result.get("message", "Completed via local reflex"),
+            "thought": "Executed zero-latency local reflex without LLM overhead."
         })
         return {
             "success": True,
             "handled_by": "local_reflex",
+            "summary": reflex_result.get("message", "Completed via local reflex"),
+            "thought": "Executed zero-latency local reflex without LLM overhead.",
+            "actions": [reflex_action],
             "result": reflex_result
         }
 
@@ -159,6 +175,9 @@ async def execute_task(req: TaskRequest):
     return {
         "success": result["status"] == "done",
         "handled_by": "orchestrator",
+        "summary": result.get("summary", ""),
+        "thought": result.get("thought", ""),
+        "actions": result.get("actions", []),
         "result": result
     }
 
