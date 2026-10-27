@@ -38,11 +38,15 @@ if (-not (Test-Path ".env")) {
     }
 }
 
-# 4. Start Backend Server in a new window
-Write-Host "[1/3] Starting VEXA Backend Engine on port 8765..." -ForegroundColor Green
-Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-Command", "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --reload"
-
-Start-Sleep -Seconds 2
+# 4. Start Backend Server in background if not already active
+$PortCheck8765 = netstat -ano | Select-String ":8765"
+if (-not $PortCheck8765) {
+    Write-Host "[1/3] Starting VEXA Backend Engine on port 8765..." -ForegroundColor Green
+    Start-Process -FilePath "python.exe" -ArgumentList "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8765" -WindowStyle Minimized
+    Start-Sleep -Seconds 2
+} else {
+    Write-Host "[1/3] VEXA Backend Engine is already active on port 8765." -ForegroundColor Green
+}
 
 # 5. Prepare Overlay Dependencies
 Set-Location (Join-Path $ScriptDir "overlay")
@@ -59,9 +63,12 @@ Write-Host ""
 $NativeExe = Join-Path $ScriptDir "overlay\src-tauri\target\debug\vexa-overlay.exe"
 if (Test-Path $NativeExe) {
     Write-Host "[INFO] Compiled native Tauri desktop binary detected: $NativeExe" -ForegroundColor Green
-    Write-Host "[INFO] Starting HUD server on http://localhost:3000..." -ForegroundColor Cyan
-    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-Command", "npm run dev"
-    Start-Sleep -Seconds 2
+    $PortCheck3000 = netstat -ano | Select-String ":3000"
+    if (-not $PortCheck3000) {
+        Write-Host "[INFO] Starting HUD server on http://localhost:3000..." -ForegroundColor Cyan
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm run dev" -WindowStyle Minimized
+        Start-Sleep -Seconds 2
+    }
     Write-Host "[INFO] Launching native VEXA transparent overlay window..." -ForegroundColor Green
     Start-Process -FilePath $NativeExe
     exit 0

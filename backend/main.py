@@ -28,8 +28,13 @@ from .memory.db import (
     list_macros,
     delete_macro,
     get_recent_tasks,
-    save_task_history
+    save_task_history,
+    clear_task_history,
+    toggle_bookmark,
+    get_bookmarked_tasks,
+    delete_task_history_item
 )
+from .memory.cache import get_cached_query, set_cached_query, clear_all_cache
 from .schemas import TaskRequest, MacroRecord, ProjectPathRecord
 from .core.router import handle_local_reflex
 from .core.orchestrator import Orchestrator
@@ -170,14 +175,70 @@ async def execute_task(req: TaskRequest):
             "result": reflex_result
         }
 
-    # 2. Multimodal LLM Execution via Orchestrator Loop
+    # 2. Redis Semantic Cache Check (Instant <1ms response)
+    bypass_cache = req.bypass_cache or any(k in prompt.lower() for k in [
+        "refresh", "re-run", "rerun", "again", "search again", "ask llm", "force"
+    ])
+    if not bypass_cache:
+        cached_res = await get_cached_query(prompt)
+        if cached_res:
+            cached_action = {
+                "id": "cache-1",
+                "step_num": 1,
+                "action_type": "redis_cache",
+                "description": f"Retrieved from Redis Cache ({cached_res.get('cache_backend', 'redis')})",
+                "status": "completed",
+                "params": {"query": prompt, "cached_at": cached_res.get("cached_at")},
+                "result": cached_res,
+                "duration_ms": 1
+            }
+            # Persist cached query execution to SQLite history so every query is recorded
+            save_task_history(
+                task_prompt=prompt,
+                status="done",
+                summary=cached_res.get("summary", "")[:250],
+                iterations=1,
+                executed_actions=[cached_action]
+            )
+            await manager.broadcast({
+                "status": "done",
+                "message": cached_res.get("summary", "")[:140],
+                "step": 1,
+                "max_steps": 1,
+                "actions": [cached_action],
+                "summary": cached_res.get("summary", ""),
+                "thought": cached_res.get("thought", "Instant response retrieved from Redis cache."),
+                "diagram": cached_res.get("diagram"),
+                "cached": True,
+                "cache_backend": cached_res.get("cache_backend", "redis")
+            })
+            return {
+                "success": True,
+                "status": "done",
+                "handled_by": "cache",
+                "cached": True,
+                "cache_backend": cached_res.get("cache_backend", "redis"),
+                "summary": cached_res.get("summary", ""),
+                "thought": cached_res.get("thought", "Instant response retrieved from Redis cache."),
+                "actions": [cached_action],
+                "diagram": cached_res.get("diagram"),
+                "result": cached_res
+            }
+
+    # 3. Multimodal LLM Execution via Orchestrator Loop
     result = await orchestrator.run_task(prompt, workspace_path=req.workspace_path)
+    if result.get("status") == "done":
+        await set_cached_query(prompt, result)
+
     return {
         "success": result["status"] == "done",
+        "status": result.get("status", "done"),
         "handled_by": "orchestrator",
         "summary": result.get("summary", ""),
         "thought": result.get("thought", ""),
         "actions": result.get("actions", []),
+        "diagram": result.get("diagram"),
+        "cached": False,
         "result": result
     }
 
@@ -226,6 +287,12 @@ async def remove_project(name: str):
 async def get_macros():
     return {"macros": list_macros()}
 
+class MacroCreateBody(BaseModel):
+    name: str
+    trigger_keyword: str
+    action_sequence: str
+    description: str = ""
+
 @app.post("/api/macros")
 async def create_macro(macro: MacroRecord):
     save_macro(macro.name, macro.trigger_keyword, macro.action_sequence, macro.description)
@@ -238,10 +305,35 @@ async def remove_macro(macro_id: int):
         raise HTTPException(status_code=404, detail="Macro not found.")
     return {"success": True}
 
-# --- Task History Endpoint ---
+# --- Task History & Bookmark Endpoints ---
 @app.get("/api/history")
-async def get_history(limit: int = 10):
+async def get_history(limit: int = 20):
     return {"history": get_recent_tasks(limit=limit)}
+
+@app.post("/api/history/{task_id}/bookmark")
+async def toggle_task_bookmark(task_id: int):
+    bookmarked = toggle_bookmark(task_id)
+    return {"success": True, "task_id": task_id, "is_bookmarked": bookmarked}
+
+@app.get("/api/history/saved")
+async def get_saved_tasks():
+    return {"saved": get_bookmarked_tasks()}
+
+@app.delete("/api/history/item/{task_id}")
+async def delete_history_item(task_id: int):
+    deleted = delete_task_history_item(task_id)
+    return {"success": deleted}
+
+@app.delete("/api/history")
+async def clear_history_endpoint():
+    clear_task_history()
+    return {"success": True, "message": "Task history cleared."}
+
+# --- Cache Endpoints ---
+@app.post("/api/cache/clear")
+async def clear_cache_endpoint():
+    await clear_all_cache()
+    return {"success": True, "message": "Redis and SQLite cache cleared."}
 
 if __name__ == "__main__":
     import uvicorn

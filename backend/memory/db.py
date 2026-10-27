@@ -46,9 +46,14 @@ def init_db():
             summary TEXT DEFAULT '',
             iterations INTEGER DEFAULT 1,
             executed_actions TEXT DEFAULT '[]',
+            is_bookmarked INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    try:
+        cursor.execute("ALTER TABLE task_history ADD COLUMN is_bookmarked INTEGER DEFAULT 0;")
+    except Exception:
+        pass
 
     # Seed default sample macros if empty
     cursor.execute("SELECT COUNT(*) FROM macros;")
@@ -204,3 +209,56 @@ def get_recent_tasks(limit: int = 10) -> List[Dict[str, Any]]:
             d["executed_actions"] = []
         results.append(d)
     return results
+
+def toggle_bookmark(task_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE task_history
+        SET is_bookmarked = CASE WHEN is_bookmarked = 1 THEN 0 ELSE 1 END
+        WHERE id = ?;
+    """, (task_id,))
+    cursor.execute("SELECT is_bookmarked FROM task_history WHERE id = ?;", (task_id,))
+    row = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    return bool(row["is_bookmarked"]) if row else False
+
+def get_bookmarked_tasks() -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, task_prompt, status, summary, iterations, executed_actions, is_bookmarked, created_at
+        FROM task_history
+        WHERE is_bookmarked = 1
+        ORDER BY id DESC;
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    results = []
+    for row in rows:
+        d = dict(row)
+        try:
+            d["executed_actions"] = json.loads(d["executed_actions"])
+        except Exception:
+            d["executed_actions"] = []
+        results.append(d)
+    return results
+
+def delete_task_history_item(task_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM task_history WHERE id = ?;", (task_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+def clear_task_history() -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM task_history WHERE is_bookmarked = 0;")
+    conn.commit()
+    conn.close()
+    return True
+

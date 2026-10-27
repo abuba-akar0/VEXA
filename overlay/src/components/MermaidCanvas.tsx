@@ -8,6 +8,8 @@ interface MermaidCanvasProps {
   title: string;
   onClose: () => void;
   onScaffold: (code: string) => void;
+  onDragStateChange?: (dragging: boolean) => void;
+  onBoundsChange?: () => void;
 }
 
 export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
@@ -15,6 +17,8 @@ export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
   title,
   onClose,
   onScaffold,
+  onDragStateChange,
+  onBoundsChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>("");
@@ -29,6 +33,20 @@ export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
     posX: 40,
     posY: 120,
   });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const initX = Math.max(20, Math.round((window.innerWidth - 640) / 2));
+      const initY = Math.max(60, Math.round((window.innerHeight - 520) / 2));
+      setPosition({ x: initX, y: initY });
+      dragRef.current.posX = initX;
+      dragRef.current.posY = initY;
+    }
+  }, []);
+
+  useEffect(() => {
+    onBoundsChange?.();
+  }, [position, isCollapsed, scale, onBoundsChange]);
 
   useEffect(() => {
     let isMounted = true;
@@ -56,6 +74,7 @@ export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
         const { svg } = await mermaid.render(id, diagramCode);
         if (isMounted) {
           setSvgContent(svg);
+          setTimeout(() => onBoundsChange?.(), 100);
         }
       } catch (err) {
         console.error("Mermaid render error:", err);
@@ -72,11 +91,20 @@ export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [diagramCode]);
+  }, [diagramCode, onBoundsChange]);
 
   // Dragging logic
   const handleMouseDown = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button") || target.closest("a")) return;
+    e.preventDefault();
     setIsDragging(true);
+    onDragStateChange?.(true);
+    if (typeof window !== "undefined") {
+      import("@tauri-apps/api/core").then(({ invoke }) => {
+        invoke("set_dragging_mode", { dragging: true }).catch(() => {});
+      });
+    }
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -86,29 +114,36 @@ export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
   };
 
   useEffect(() => {
+    if (!isDragging) return;
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
+      e.preventDefault();
       const dx = e.clientX - dragRef.current.startX;
       const dy = e.clientY - dragRef.current.startY;
-      setPosition({
-        x: Math.max(10, dragRef.current.posX + dx),
-        y: Math.max(10, dragRef.current.posY + dy),
-      });
+      // Multi-Monitor Support: Allow free movement across all displays
+      const newX = dragRef.current.posX + dx;
+      const newY = Math.max(10, dragRef.current.posY + dy);
+      setPosition({ x: newX, y: newY });
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      e.preventDefault();
       setIsDragging(false);
+      onDragStateChange?.(false);
+      if (typeof window !== "undefined") {
+        import("@tauri-apps/api/core").then(({ invoke }) => {
+          invoke("set_dragging_mode", { dragging: false }).catch(() => {});
+        });
+      }
+      onBoundsChange?.();
     };
 
-    if (isDragging) {
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
-    }
+    window.addEventListener("mousemove", handleMouseMove, { capture: true });
+    window.addEventListener("mouseup", handleMouseUp, { capture: true });
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("mousemove", handleMouseMove, { capture: true });
+      window.removeEventListener("mouseup", handleMouseUp, { capture: true });
     };
-  }, [isDragging]);
+  }, [isDragging, onDragStateChange, onBoundsChange]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(diagramCode);
@@ -118,8 +153,22 @@ export const MermaidCanvas: React.FC<MermaidCanvasProps> = ({
 
   return (
     <div
+      onMouseEnter={() => {
+        if (typeof window !== "undefined") {
+          import("@tauri-apps/api/core").then(({ invoke }) => {
+            invoke("set_hover_mode", { hovered: true }).catch(() => {});
+          });
+        }
+      }}
+      onMouseLeave={() => {
+        if (typeof window !== "undefined") {
+          import("@tauri-apps/api/core").then(({ invoke }) => {
+            invoke("set_hover_mode", { hovered: false }).catch(() => {});
+          });
+        }
+      }}
       style={{ left: `${position.x}px`, top: `${position.y}px` }}
-      className="fixed z-40 w-[640px] glass-panel rounded-xl shadow-glow overflow-hidden transition-shadow duration-300 border border-cyan-500/30"
+      className="fixed z-40 w-[640px] glass-panel rounded-xl shadow-glow overflow-hidden transition-shadow duration-300 border border-cyan-500/30 interactive-hud-element pointer-events-auto select-none"
     >
       {/* Title Bar / Drag Handle */}
       <div

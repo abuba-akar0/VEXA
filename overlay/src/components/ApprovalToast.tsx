@@ -27,7 +27,7 @@ export const ApprovalToast: React.FC<ApprovalToastProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="glass-panel w-[460px] rounded-2xl p-6 border border-amber-500/40 shadow-glow-magenta flex flex-col gap-4">
+      <div className="glass-panel w-[460px] rounded-2xl p-6 border border-amber-500/40 shadow-glow-magenta flex flex-col gap-4 interactive-hud-element pointer-events-auto">
         {/* Header */}
         <div className="flex items-center gap-3 text-amber-400">
           <div className="p-2.5 rounded-full bg-amber-500/20 border border-amber-500/30">

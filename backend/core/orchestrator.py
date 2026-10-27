@@ -13,7 +13,7 @@ from ..schemas import VexaPlan, VexaAction, TaskStatusUpdate
 from ..perception.vision import capture_screen
 from ..perception.context import gather_full_context
 from ..tools import gui_control, workspace_coder, architect
-from ..memory.db import save_task_history, get_project_path
+from ..memory.db import save_task_history, get_project_path, get_recent_tasks
 
 SYSTEM_INSTRUCTION = """You are VEXA (Virtual Execution & X-Layer Architect), an ultra-lightweight autonomous screen-overlay agent for Windows.
 You observe the user's desktop, workspace files, and active terminal, and execute actions with extreme precision.
@@ -31,11 +31,16 @@ CRITICAL OPERATIONAL RULES:
    - The desktop screenshot has a normalized grid from 0 to 1000 on both X and Y axes (0,0 is top-left, 1000,1000 is bottom-right).
    - When specifying target_x and target_y for click, double_click, right_click, supply integers in the 0-1000 range.
    - You can plan a batch of 1 to 5 sequential actions per step.
-5. CLOSED-LOOP VERIFICATION:
+5. APPLICATION LAUNCHING & REAL EXECUTION:
+   - When the user asks to open an application (e.g. "open whatsapp", "open spotify", "launch chrome", "open notepad") or visit a website:
+   - DO NOT write instructions telling the user how to open it! ACTUALLY OPEN IT!
+   - Use action_type="run_command" with a Windows command like 'start whatsapp:', 'start spotify:', 'start notepad', 'start https://web.whatsapp.com', or 'start https://www.google.com/search?q=...'.
+   - Then set goal_achieved=true.
+6. CLOSED-LOOP VERIFICATION:
    - As soon as the user's goal is fulfilled, emit an action with action_type="done" and set goal_achieved=true.
-6. SAFETY & APPROVAL:
+7. SAFETY & APPROVAL:
    - For irreversible destructive actions (e.g. git reset --hard, deleting repositories or dropping databases), set action_type="require_approval" and is_destructive=true.
-7. STRUCTURED JSON OUTPUT:
+8. STRUCTURED JSON OUTPUT:
    - You MUST output valid JSON adhering to the VexaPlan schema:
      {
        "thought": "...",
@@ -44,6 +49,11 @@ CRITICAL OPERATIONAL RULES:
        "goal_achieved": true/false,
        "summary": "..."
      }
+9. FRESH CODE GENERATION IN CHAT VS WORKSPACE MODIFICATION:
+   - When the user asks to write, generate, or explain code in chat (e.g. "write calculator code here in chat", "show code without saving to file", "generate python function", "give me code in response"):
+     - You MUST generate fresh, complete, clean, and working code directly in your response text enclosed in markdown code fences (```python ... ```).
+     - NEVER lazily call read_file on existing workspace files to re-use old code unless the user explicitly requested you to "read", "inspect", or "review" that existing file!
+     - Deliver the complete code in your response using action_type="done" with text="<markdown with code blocks>", and set goal_achieved=true.
 """
 
 class Orchestrator:
@@ -219,6 +229,172 @@ class Orchestrator:
         if saved_path:
             target_workspace = saved_path
 
+        prompt_lower = task_prompt.lower().strip()
+
+        # 1. Architecture Blueprint Intent
+        is_diagram_intent = any(k in prompt_lower for k in [
+            "architecture diagram", "draw architecture", "architecture of",
+            "mermaid diagram", "draw diagram", "render diagram", "blueprint of",
+            "system architecture", "flowchart of", "sequence diagram"
+        ])
+        if is_diagram_intent:
+            await self.emit_status("planning", "Generating Mermaid Architecture Blueprint...", step=1, max_steps=1)
+            t0 = time.time()
+            diagram_prompt = f"""You are a master software architect. Generate a clean, comprehensive, modern Mermaid.js diagram for: '{task_prompt}'.
+Output ONLY the mermaid code block inside ```mermaid ... ``` fences, followed by a 2-sentence architectural summary.
+Use modern styling (graph TD, classDef, or sequenceDiagram)."""
+            diagram_res = await call_gemini_with_resilience(contents=diagram_prompt, temperature=0.2)
+            code = architect.extract_mermaid_from_text(diagram_res) or architect.clean_mermaid_code(diagram_res)
+            title = task_prompt.replace("draw", "").replace("architecture of", "").replace("architecture diagram of", "").strip().title() or "System Architecture"
+            dur_ms = int((time.time() - t0) * 1000)
+            diagram_data = {
+                "diagram_code": code,
+                "diagram_title": title
+            }
+            step_item = {
+                "id": "arch-1",
+                "step_num": 1,
+                "action_type": "render_diagram",
+                "description": f"Architecture Blueprint: {title}",
+                "status": "completed",
+                "params": {"diagram_title": title},
+                "result": {"title": title, "code_length": len(code)},
+                "duration_ms": dur_ms
+            }
+            save_task_history(
+                task_prompt=task_prompt,
+                status="done",
+                summary=f"Rendered architecture blueprint: {title}",
+                iterations=1,
+                executed_actions=[diagram_data]
+            )
+            await self.emit_status(
+                "done",
+                f"Architecture Blueprint rendered: {title}",
+                step=1,
+                max_steps=1,
+                actions=[step_item],
+                diagram=diagram_data,
+                summary=f"Architecture Blueprint successfully rendered: {title}. You can drag, zoom, inspect, or scaffold this blueprint to your repository.",
+                thought="Detected architecture blueprint intent. Generated Mermaid.js diagram directly."
+            )
+            return {
+                "status": "done",
+                "iterations": 1,
+                "thought": "Detected architecture blueprint intent. Generated Mermaid.js diagram directly.",
+                "summary": f"Architecture Blueprint rendered: {title}",
+                "actions": [step_item],
+                "diagram": diagram_data
+            }
+
+        # Gather recent conversation memory for multi-turn context
+        recent_tasks = get_recent_tasks(limit=4)
+        recent_tasks.reverse()
+        history_lines = []
+        for t in recent_tasks:
+            p = t.get("task_prompt", "")
+            s = t.get("summary", "")
+            if p and p != task_prompt:
+                history_lines.append(f"User: {p}\nVEXA: {s[:250]}")
+        chat_history_str = "\n".join(history_lines) if history_lines else "None"
+
+        # Code generation in chat without file writing:
+        is_chat_code_request = (
+            any(k in prompt_lower for k in [
+                "in chat", "here in chat", "dont write it in file", "don't write it in file",
+                "dont write in file", "don't write in file", "dont write to file", "don't write to file",
+                "do not save", "without saving", "show code", "give me code", "write code of",
+                "write code for", "write calculator", "generate code"
+            ])
+            and not any(k in prompt_lower for k in ["save to", "write to file", "create file", "save into file"])
+        )
+
+        # 2. General Knowledge / Informational Intent vs Action Intent
+        is_question_or_info = (
+            prompt_lower.startswith((
+                "what is", "what are", "what was", "who is", "who was", "why is", "why does",
+                "when was", "when did", "how does", "how do", "explain", "tell me about",
+                "difference between", "define", "definition of", "history of", "list the"
+            ))
+            or (prompt_lower.endswith("?") and not any(prompt_lower.startswith(v) for v in ["can you open", "open", "launch", "start", "run", "search", "play"]))
+        )
+
+        is_action_intent = any(prompt_lower.startswith(v) for v in [
+            "open", "launch", "start", "run", "close", "kill", "stop",
+            "click", "double click", "right click", "type", "press",
+            "search", "google", "find", "play", "create", "make",
+            "write", "edit", "patch", "delete", "remove", "install",
+            "build", "test", "git", "scaffold", "refactor"
+        ]) or any(k in prompt_lower for k in [
+            "click on", "type into", "press key", "on screen", "open file",
+            "run command", "open terminal", "open app"
+        ])
+
+        if is_chat_code_request or (is_question_or_info and not is_action_intent):
+            await self.emit_status("planning", "Reasoning with VEXA Knowledge & Code Engine...", step=1, max_steps=1)
+            t0 = time.time()
+            knowledge_prompt = f"""The user asked or instructed: '{task_prompt}'.
+
+RECENT CONVERSATION HISTORY:
+{chat_history_str}
+
+Provide an insightful, well-structured, authoritative, and helpful response.
+Formatting Rules:
+- If asked to write, provide, or generate code:
+  - Generate fresh, original, complete, fully working code directly in your response text.
+  - Enclose all code in markdown code fences with the language tag (e.g. ```python\\n...\\n```).
+  - Include comments explaining key sections and usage instructions.
+  - NEVER output instructions telling the user to read existing workspace files unless explicitly requested.
+- Use clean Markdown with bold terms, bullet points for lists, and concise paragraphs.
+- Avoid raw trailing commas, unclosed brackets, or loose list punctuation.
+- Make the answer direct, complete, and engaging."""
+            knowledge_res = await call_gemini_with_resilience(
+                contents=knowledge_prompt,
+                system_instruction="You are VEXA (Virtual Execution & X-Layer Architect), an advanced, intelligent AI desktop assistant. Provide direct, authoritative, clean, and helpful answers with beautiful markdown code fences.",
+                temperature=0.3
+            )
+
+            # Auto-wrap unfenced raw code if Gemini omitted triple backticks
+            cleaned_res = knowledge_res.strip()
+            if "```" not in cleaned_res and any(cleaned_res.startswith(k) for k in ["import ", "def ", "class ", "from ", "async def ", "function ", "const "]):
+                lang = "python" if not cleaned_res.startswith(("function ", "const ")) else "javascript"
+                knowledge_res = f"```{lang}\n{cleaned_res}\n```"
+
+            dur_ms = int((time.time() - t0) * 1000)
+            step_item = {
+                "id": "info-1",
+                "step_num": 1,
+                "action_type": "knowledge_response",
+                "description": f"Answered: {task_prompt}",
+                "status": "completed",
+                "params": {"query": task_prompt},
+                "result": knowledge_res,
+                "duration_ms": dur_ms
+            }
+            save_task_history(
+                task_prompt=task_prompt,
+                status="done",
+                summary=knowledge_res[:200],
+                iterations=1,
+                executed_actions=[step_item]
+            )
+            await self.emit_status(
+                "done",
+                knowledge_res[:150] + "..." if len(knowledge_res) > 150 else knowledge_res,
+                step=1,
+                max_steps=1,
+                actions=[step_item],
+                summary=knowledge_res,
+                thought="Understood user intent as an informational or direct code generation query. Delivered complete response with Gemini reasoning."
+            )
+            return {
+                "status": "done",
+                "iterations": 1,
+                "thought": "Understood user intent as an informational or direct code generation query. Delivered complete response with Gemini reasoning.",
+                "summary": knowledge_res,
+                "actions": [step_item]
+            }
+
         max_iterations = 3
         executed_history: List[Dict[str, Any]] = []
         all_executed_steps: List[Dict[str, Any]] = []
@@ -250,6 +426,8 @@ class Orchestrator:
                         mime_type=screen_info["mime_type"]
                     ),
                     f"""USER GOAL: {task_prompt}
+RECENT CONVERSATION HISTORY:
+{chat_history_str}
 CURRENT ITERATION: {iteration} of {max_iterations}
 WORKSPACE DIRECTORY: {target_workspace}
 ACTIVE WINDOW: {context_info['active_window']}

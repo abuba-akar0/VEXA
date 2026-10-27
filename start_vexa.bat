@@ -37,12 +37,15 @@ if not exist ".env" (
     )
 )
 
-:: 4. Start Backend Server
-echo [1/3] Starting VEXA Backend Engine on port 8765...
-start "VEXA Backend" cmd /k "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --reload"
-
-:: Wait for backend socket
-powershell -NoProfile -Command "Start-Sleep -Seconds 2"
+:: 4. Start Backend Server (runs minimized in background)
+netstat -ano | findstr :8765 >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo [1/3] Starting VEXA Backend Engine on port 8765...
+    start /min "VEXA Backend" python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+    powershell -NoProfile -Command "Start-Sleep -Seconds 2"
+) else (
+    echo [1/3] VEXA Backend Engine is already active on port 8765.
+)
 
 :: 5. Prepare Overlay Dependencies
 cd overlay
@@ -52,18 +55,21 @@ if not exist "node_modules" (
 )
 
 :: 6. Launch Overlay UI
-echo [3/3] Launching VEXA Overlay...
+echo [3/3] Launching VEXA Desktop Overlay...
 echo [INFO] Press Alt+Space at any time to toggle HUD interaction focus.
 echo.
 
 if exist "src-tauri\target\debug\vexa-overlay.exe" (
     echo [INFO] Compiled native Tauri desktop binary detected!
-    echo [INFO] Starting HUD server on http://localhost:3000...
-    start "VEXA HUD Server" cmd /c "npm run dev"
-    powershell -NoProfile -Command "Start-Sleep -Seconds 2"
+    netstat -ano | findstr :3000 >nul 2>nul
+    if %ERRORLEVEL% neq 0 (
+        echo [INFO] Starting HUD server on http://localhost:3000...
+        start /min "VEXA HUD Server" cmd /c "npm run dev"
+        powershell -NoProfile -Command "Start-Sleep -Seconds 2"
+    )
     echo [INFO] Launching native transparent desktop overlay...
     start "" "src-tauri\target\debug\vexa-overlay.exe"
-    goto :end
+    exit /b 0
 )
 
 where cl >nul 2>nul

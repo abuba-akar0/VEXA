@@ -54,6 +54,7 @@ class TaskRequest(BaseModel):
     workspace_path: Optional[str] = None
     allow_gui: bool = True
     allow_terminal: bool = True
+    bypass_cache: bool = False
 
 class TaskStatusUpdate(BaseModel):
     status: Literal["idle", "observing", "planning", "executing", "pre_click_hide", "verifying", "awaiting_approval", "done", "error"]
